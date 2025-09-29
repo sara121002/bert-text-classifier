@@ -13,6 +13,11 @@ def get_args():
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--lr", type=float, default=2e-5)
     p.add_argument("--out_dir", default="models/bert-agnews")
+    # 1) add to get_args()
+    p.add_argument("--max_train_samples", type=int, default=None)
+    p.add_argument("--max_eval_samples", type=int, default=None)
+    p.add_argument("--seed", type=int, default=42)
+
     return p.parse_args()
 
 def main():
@@ -31,6 +36,20 @@ def main():
                                   truncation=True)
     ds_enc = ds.map(tok_fn, batched=True)
     ds_enc = ds_enc.rename_column("label","labels") if "label" in ds_enc["train"].features else ds_enc
+
+      # 2.5) optional: limit dataset size for fast tests
+    from datasets import DatasetDict
+    ds_enc = ds_enc.shuffle(seed=args.seed)
+
+    def maybe_slice(split_name, k):
+        if k is None:
+            return ds_enc[split_name]
+        n = min(k, len(ds_enc[split_name]))
+        return ds_enc[split_name].select(range(n))
+
+    train_ds = maybe_slice("train", args.max_train_samples)
+    eval_split = "test" if "test" in ds_enc else "validation"
+    eval_ds = maybe_slice(eval_split, args.max_eval_samples)
 
     # 3) model
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -56,7 +75,7 @@ def main():
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
-        evaluation_strategy="epoch",
+        eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="f1",
@@ -66,8 +85,8 @@ def main():
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=ds_enc["train"],
-        eval_dataset=ds_enc["test"] if "test" in ds_enc else ds_enc["validation"],
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
         tokenizer=tok,
         data_collator=collator,
         compute_metrics=compute_metrics,
